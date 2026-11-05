@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pharos whale watch</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Pharos whale watch</h1>
+    <p class="sub">
+      Large token movements on chain 1672, ranked by share of total supply.
+      Every number on this page comes from the chain; nothing is estimated or simulated here.
+    </p>
+  </header>
+
+  <form id="controls" autocomplete="off">
+    <label>Window
+      <select name="hours">
+        <option value="0.25">15 minutes</option>
+        <option value="1" selected>1 hour</option>
+        <option value="3">3 hours</option>
+        <option value="6">6 hours</option>
+      </select>
+    </label>
+    <label>Min share
+      <select name="minShareBps">
+        <option value="1" selected>0.01%</option>
+        <option value="10">0.1%</option>
+        <option value="100">1%</option>
+      </select>
+    </label>
+    <label>Rows
+      <select name="limit">
+        <option value="20" selected>20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+    </label>
+    <label class="grow">Watch (comma separated, optional)
+      <input name="watch" placeholder="0x…, 0x…" spellcheck="false">
+    </label>
+    <button type="submit" id="go">Scan</button>
+  </form>
+
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+
+  <section id="meta" class="meta" hidden></section>
+  <section id="gap" class="gap" hidden></section>
+  <section id="results" hidden>
+    <table id="table">
+      <thead>
+        <tr>
+          <th>Share</th><th>Token</th><th>Amount</th><th>Kind</th><th>From</th><th>To</th><th>Block</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+  <section id="watchSection" class="watch" hidden>
+    <h2>Watchlist activity</h2>
+    <table id="watchTable">
+      <thead><tr><th>Dir</th><th>Share</th><th>Token</th><th>Amount</th><th>From</th><th>To</th><th>Block</th></tr></thead>
+      <tbody id="watchRows"></tbody>
+    </table>
+  </section>
+  <section id="skipped" class="skipped" hidden>
+    <h2>Not counted</h2>
+    <ul id="skippedList"></ul>
+  </section>
+
+  <footer>
+    <p>
+      A whale here means a transfer of at least the chosen share of a token's total supply.
+      Share is used instead of a fixed amount because token decimals on this chain range from 6 to 18,
+      so one amount in wei would mean a different thing for every token.
+    </p>
+  </footer>
+</main>
+<script src="/app.js" type="module"></script>
+</body>
+</html>

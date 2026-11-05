@@ -1,0 +1,16 @@
+{
+  "name": "whale-watching-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only tracker for large token movements on Pharos, ranked by share of total supply.",
+  "scripts": {
+    "test": "node test/unit.test.mjs && node test/api.test.mjs",
+    "test:unit": "node test/unit.test.mjs",
+    "test:api": "node test/api.test.mjs",
+    "test:live": "node test/live.test.mjs",
+    "verify:chain": "node scripts/verify-chain.mjs",
+    "dev": "npx wrangler pages dev public --compatibility-date=2026-01-01 --port=8781"
+  },
+  "engines": { "node": ">=18" }
+}
