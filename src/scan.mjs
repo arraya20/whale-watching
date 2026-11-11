@@ -11,7 +11,7 @@ import { createRpc, RpcError, decodeQuantity } from "./rpc.mjs";
 import { scanRange } from "./logs.mjs";
 import { createTokenCache, TRANSFER_TOPIC } from "./tokens.mjs";
 import { decodeTransferLog, toFinding } from "./whales.mjs";
-import { rankFindings } from "./share.mjs";
+import { rankFindings, shareBps } from "./share.mjs";
 import { normalizeAddress, DEFAULT_WATCHLIST, labelAddress } from "./address.mjs";
 
 export const PHAROS_CHAIN_ID = 1672n;
@@ -197,11 +197,15 @@ export async function scan({
       else metadataInvalid++;
       continue;
     }
-    const finding = toFinding(transfer, meta.token, dynamicLabels);
     const fromLow = transfer.from.toLowerCase();
     const toLow = transfer.to.toLowerCase();
     const touchesWatch = watchedLower.has(fromLow) || watchedLower.has(toLow);
-    const isSignificant = BigInt(finding.shareBpsRaw) >= BigInt(minShareBps);
+    // Compute the cheap share first and build the full finding only when the
+    // transfer will be shown. toFinding performs checksum + explanation work
+    // that would otherwise run for every log and blow the Workers CPU budget.
+    const isSignificant = shareBps(transfer.amountRaw, meta.token.totalSupplyRaw) >= BigInt(minShareBps);
+    if (!isSignificant && !touchesWatch) continue;
+    const finding = toFinding(transfer, meta.token, dynamicLabels);
 
     if (touchesWatch) {
       const direction = watchedLower.has(fromLow) && watchedLower.has(toLow)

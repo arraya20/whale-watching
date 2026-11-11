@@ -65,9 +65,12 @@ export function decodeTransferLog(log) {
   return {
     ok: true,
     transfer: {
-      token: toChecksumAddress(log.address),
-      from: toChecksumAddress(from.address),
-      to: toChecksumAddress(to.address),
+      // Lowercase here. Checksumming every log's three addresses was the
+      // dominant CPU cost in a Workers request; it is deferred to toFinding,
+      // which runs only for transfers that will actually be shown.
+      token: String(log.address).toLowerCase(),
+      from: from.address,
+      to: to.address,
       kind: classifyKind(from.address, to.address),
       amountRaw: amount.amount,
       blockNumber,
@@ -107,6 +110,10 @@ export function toFinding(transfer, token, extraLabels = null) {
   const bps = shareBps(transfer.amountRaw, token.totalSupplyRaw);
   const amount = formatRawShort(transfer.amountRaw, token.decimals, 6);
   const pct = sharePercent(transfer.amountRaw, token.totalSupplyRaw);
+  // Checksummed here, not at decode time, because this runs only for transfers
+  // that survive the threshold/watch filter.
+  const from = toChecksumAddress(transfer.from);
+  const to = toChecksumAddress(transfer.to);
   const tokenSelfLabel = `${token.symbol} Token Contract`;
   const resolveLabel = (addr) => {
     const known = labelAddress(addr, extraLabels);
@@ -114,8 +121,8 @@ export function toFinding(transfer, token, extraLabels = null) {
     if (addr.toLowerCase() === token.address.toLowerCase()) return tokenSelfLabel;
     return null;
   };
-  const fromLabel = resolveLabel(transfer.from);
-  const toLabel = resolveLabel(transfer.to);
+  const fromLabel = resolveLabel(from);
+  const toLabel = resolveLabel(to);
 
   return {
     token: {
@@ -125,9 +132,9 @@ export function toFinding(transfer, token, extraLabels = null) {
       totalSupply: formatRaw(token.totalSupplyRaw, token.decimals),
     },
     kind: transfer.kind,
-    from: transfer.from,
+    from,
     fromLabel,
-    to: transfer.to,
+    to,
     toLabel,
     amountRaw: transfer.amountRaw.toString(),
     // Display value, truncated to 6 decimals — never rounded up. The exact
@@ -145,8 +152,8 @@ export function toFinding(transfer, token, extraLabels = null) {
       amount,
       symbol: token.symbol,
       sharePercent: pct,
-      from: transfer.from,
-      to: transfer.to,
+      from,
+      to,
       fromLabel,
       toLabel,
     }),

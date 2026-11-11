@@ -58,15 +58,24 @@ export function labelAddress(address, extraLabels = null) {
   return null;
 }
 
+// EIP-55 checksum is pure, so it is memoised. A busy window produces thousands
+// of address references and the keccak round function is the scan's main CPU
+// cost; recomputing the same checksum per log is what pushed a Workers request
+// past the CPU limit (Cloudflare error 1102).
+const checksumCache = new Map();
+
 /** EIP-55 casing for any 20-byte hex address. */
 export function toChecksumAddress(address) {
   const lower = String(address).toLowerCase().replace(/^0x/, "");
   if (!/^[0-9a-f]{40}$/.test(lower)) throw new Error(`not a 20-byte address: ${address}`);
+  const cached = checksumCache.get(lower);
+  if (cached) return cached;
   const hash = keccak256Hex(lower).slice(2);
   let out = "0x";
   for (let i = 0; i < 40; i++) {
     out += parseInt(hash[i], 16) >= 8 ? lower[i].toUpperCase() : lower[i];
   }
+  checksumCache.set(lower, out);
   return out;
 }
 
