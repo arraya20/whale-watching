@@ -41,13 +41,14 @@ GET /api/whales?hours=1&minShareBps=1&watch=0x75E54ACb9107Cc35969b44Eb6342F50686
 | ------------- | ------------------------------------ | ------------------------------------------- |
 | `hours`       | how far back to scan                 | 0.05 – 6, up to 2 dp                        |
 | `minShareBps` | minimum share of supply, in bps      | integer 0 – 10000                           |
+| `minPros`     | minimum native PROS value to report  | decimal string, `0` to any exact amount     |
 | `limit`       | maximum findings returned            | integer 1 – 100                             |
 | `watch`       | address to watch (repeatable)        | max 20, EIP-55 required (defaults to 5)     |
 
 The caller supplies **intent only**. Supplying a fact — `from`, `to`, `amountWei`,
-`decimals`, `totalSupply`, `verdict`, `watchedAddresses` and similar names — is
-refused with `400 CALLER_SUPPLIED_FACTS` rather than ignored, because an ignored
-fact still leaves the caller believing it was applied.
+`value`, `nativeValue`, `decimals`, `totalSupply`, `verdict`, `watchedAddresses`
+and similar names — is refused with `400 CALLER_SUPPLIED_FACTS` rather than
+ignored, because an ignored fact still leaves the caller believing it was applied.
 
 ### Response
 
@@ -122,6 +123,7 @@ fact still leaves the caller believing it was applied.
 ```
 
 `kind` is `TRANSFER`, `MINT` (from the zero address), `BURN` (to it) or `SELF`.
+Native findings use `NATIVE_OUT`, `NATIVE_IN` and `NATIVE_SELF` instead.
 
 ## Fail-closed behaviour
 
@@ -168,6 +170,27 @@ Both were found by probing, not from documentation, and both shape the design:
 Block time is *measured* per scan from two block timestamps rather than assumed,
 because it is not 12s and not 6s — the live sample above came back at 1.119s.
 
+## Native PROS
+
+ERC-20 movement is read from `Transfer` logs, but native PROS has no log: its
+`value` lives only in a transaction's block body. Native PROS (chain 1672, 18
+decimals) is therefore read with `eth_getBlockByNumber(n, true)` over a bounded
+window and filtered to transactions paying or collecting a watched address.
+
+- The native window is capped at `NATIVE_MAX_BLOCKS = 4000` (a measured ceiling,
+  below the 6000-block ERC-20 cap), read in JSON-RPC batches of 100 at concurrency
+  2.
+- `minPros` is a value term, not a share term: native has no supply to divide by.
+  A native transfer below `minPros` PROS is dropped from `watch.native`; the
+  default `"0"` reports every native movement touching a watched address.
+- Native tracking is **additive and fail-soft**. A native read that fails reports
+  `scan.native.partial: true` and its gaps, but never invalidates the ERC-20
+  findings. The ERC-20 failure contract (`SCAN_UNAVAILABLE`) is unchanged.
+- Native has no token contract and no supply, so `watch.native` entries carry
+  `token.address: null` and `token.totalSupply: null`, and no `sharePercent`.
+  `watch.summary` gains `nativeIn`, `nativeOut`, `nativeBalance`,
+  `nativeBalanceWei`, `nativeDelta` (signed, `+` prefixed) and `nativeDeltaWei`.
+
 ## Limits
 
 - `maxHours: 6`, `maxChunks: 6` — a scan never exceeds 6000 blocks regardless of
@@ -186,7 +209,7 @@ because it is not 12s and not 6s — the live sample above came back at 1.119s.
 ## Running
 
 ```
-npm test              # 61 unit + 18 API, offline, no network
+npm test              # 69 unit + 20 API, offline, no network
 npm run test:live     # 14 tests against rpc.pharos.xyz
 npm run verify:chain  # independent recomputation, 16 checks
 npm run dev           # wrangler pages dev on :8781
@@ -211,6 +234,7 @@ src/rpc.mjs         JSON-RPC with rate-limit backoff
 src/logs.mjs        chunk planning and range scanning
 src/tokens.mjs      symbol/decimals/totalSupply, cached per scan
 src/whales.mjs      Transfer log decoding and finding construction
+src/native.mjs      native PROS block-body decoding and batching
 src/share.mjs       basis-point ranking and percent display
 src/scan.mjs        orchestration and validation
 functions/api/whales.js   GET handler

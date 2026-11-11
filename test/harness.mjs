@@ -111,6 +111,9 @@ export function transferLog({ token, from, to, amount, block, logIndex = 0, txHa
  * @param {Record<string,{symbol:string,decimals:number,totalSupply:bigint,bytes32?:boolean}>} [spec.tokens]
  * @param {Set<number>} [spec.failFrom] chunk start blocks whose getLogs must throw
  * @param {object} [spec.rawLogs] override eth_getLogs entirely
+ * @param {Record<string,bigint|number|((block:bigint)=>bigint)>} [spec.balances] native balances by address
+ * @param {object[]} [spec.nativeTxs] native transactions by block, each {from,to,value,block,txIndex?}
+ * @param {Set<number>} [spec.failBlocks] blocks whose full-body read must throw
  */
 export function fakeChain(spec = {}) {
   const {
@@ -122,6 +125,9 @@ export function fakeChain(spec = {}) {
     failFrom = new Set(),
     failTokens = new Set(),
     rawLogs = null,
+    balances = {},
+    nativeTxs = [],
+    failBlocks = new Set(),
   } = spec;
 
   const calls = [];
@@ -158,33 +164,96 @@ export function fakeChain(spec = {}) {
     });
   }
 
-  async function call(method, params) {
-    calls.push({ method, params });
+  function getBalance(params) {
+    const [addr, blockHex] = params;
+    const entry = balances[String(addr).toLowerCase()];
+    const at = blockHex == null ? 0n : BigInt(blockHex);
+    if (typeof entry === "function") return hexOf(entry(at));
+    if (typeof entry === "bigint") return hexOf(entry);
+    if (typeof entry === "number") return hexOf(BigInt(entry));
+    return "0x0";
+  }
+
+  function getBlockByNumber(params) {
+    const b = Number(BigInt(params[0]));
+    if (b < 0) return null;
+    if (failBlocks.has(b)) {
+      throw Object.assign(new Error("native block throttled"), { rpcCode: -32011, retryable: true });
+    }
+    const txns = params[1] === true
+      ? nativeTxs
+          .filter((t) => Number(BigInt(t.block ?? t.blockNumber)) === b)
+          .map((t) => ({
+            from: String(t.from).toLowerCase(),
+            to: t.to != null ? String(t.to).toLowerCase() : null,
+            value: hexOf(t.value),
+            hash: t.hash ?? "0x" + BigInt(b).toString(16).padStart(64, "0"),
+            transactionIndex: hexOf(t.txIndex ?? 0),
+          }))
+      : [];
+    return { number: hexOf(b), timestamp: hexOf(timestampOf(b)), transactions: txns };
+  }
+
+  function dispatch(method, params) {
     switch (method) {
       case "eth_chainId":
         return hexOf(chainId);
       case "eth_blockNumber":
         return hexOf(head);
-      case "eth_getBlockByNumber": {
-        const b = Number(BigInt(params[0]));
-        if (b < 0) return null;
-        return { number: hexOf(b), timestamp: hexOf(timestampOf(b)) };
-      }
+      case "eth_getBlockByNumber":
+        return getBlockByNumber(params);
       case "eth_getLogs":
         if (rawLogs) return rawLogs(params[0]);
         return getLogs(params);
       case "eth_call":
         return ethCall(params);
+      case "eth_getBalance":
+        return getBalance(params);
       default:
         throw new Error(`fake chain does not implement ${method}`);
     }
   }
 
+  async function call(method, params) {
+    calls.push({ method, params });
+    return dispatch(method, params);
+  }
+
+  // Per-item results, matching createRpc.batch's contract: a failed item is a
+  // failed block, never a flattened array that hides which block failed.
+  async function batch(list) {
+    return list.map(({ method, params }) => {
+      try {
+        return { ok: true, value: dispatch(method, params) };
+      } catch (e) {
+        return { ok: false, code: e.rpcCode ?? "RPC_ERROR", message: e.message };
+      }
+    });
+  }
+
   // fetch-shaped stub, for exercising the real createRpc + API handler.
   async function fetchStub(url, init) {
     const body = JSON.parse(init.body);
+    if (Array.isArray(body)) {
+      const items = body.map((item) => {
+        try {
+          const result = dispatch(item.method, item.params);
+          return { jsonrpc: "2.0", id: item.id, result };
+        } catch (e) {
+          return {
+            jsonrpc: "2.0",
+            id: item.id,
+            error: { code: e.rpcCode ?? -32000, message: e.message },
+          };
+        }
+      });
+      return new Response(JSON.stringify(items), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     try {
-      const result = await call(body.method, body.params);
+      const result = dispatch(body.method, body.params);
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -200,7 +269,7 @@ export function fakeChain(spec = {}) {
     }
   }
 
-  return { call, fetchStub, calls };
+  return { call, batch, fetchStub, calls };
 }
 
 /** A Response-like object good enough for the API handler's json() helper. */

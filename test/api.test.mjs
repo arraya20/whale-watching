@@ -210,6 +210,24 @@ await test("a degraded scan is 200 but reports what it could not measure", async
   assert(body.scan.transfersUnranked > 0);
 });
 
+suite("API: native PROS");
+
+await test("minPros is accepted and returned in the threshold", async () => {
+  const { status, body } = await get("?hours=1&minPros=2");
+  eq(status, 200);
+  eq(body.threshold.minPros, "2");
+  assert(body.scan.native, "native scan should be present when a watchlist exists");
+});
+
+await test("the caller cannot supply native value facts", async () => {
+  const { status, body } = await get("?hours=1&value=123");
+  eq(status, 400);
+  eq(body.code, "CALLER_SUPPLIED_FACTS");
+  const nv = await get("?hours=1&nativeValue=123");
+  eq(nv.status, 400);
+  eq(nv.body.code, "CALLER_SUPPLIED_FACTS");
+});
+
 suite("API: method");
 
 await test("a non-GET method is 405", async () => {

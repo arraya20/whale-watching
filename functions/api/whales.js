@@ -29,6 +29,7 @@ const BAD_REQUEST = new Set([
   "BAD_LIMIT",
   "BAD_WATCH",
   "BAD_WATCH_ADDRESS",
+  "BAD_MIN_PROS",
 ]);
 
 // The chain could not be read. Not the caller's fault, and definitely not a
@@ -59,6 +60,8 @@ const FORBIDDEN_FIELDS = [
   "totalSupply",
   "balance",
   "balances",
+  "value",
+  "nativeValue",
   "verdict",
   "findings",
   "watchedAddresses",
@@ -105,6 +108,7 @@ export async function onRequestGet(context) {
     hours: parseHours(params.get("hours"), 1),
     minShareBps: parseNumber(params.get("minShareBps"), 1),
     limit: parseNumber(params.get("limit"), 20),
+    minPros: params.get("minPros") ?? "0",
     ...(rawWatch.length > 0 ? { watch: rawWatch } : {}),
     rpcUrl: env?.PHAROS_RPC_URL || undefined,
   };

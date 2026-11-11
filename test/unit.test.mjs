@@ -9,6 +9,7 @@ import { planChunks, scanRange, MAX_BLOCK_SPAN } from "../src/logs.mjs";
 import { decodeTransferLog, classifyKind, toFinding } from "../src/whales.mjs";
 import { scan, LIMITS } from "../src/scan.mjs";
 import { keccak256Hex } from "../src/keccak.mjs";
+import { decodeNativeTx, classifyNativeKind, scanNative, NATIVE_SYMBOL } from "../src/native.mjs";
 
 const WPROS = "0x1111111111111111111111111111111111111111";
 const USDC = "0x2222222222222222222222222222222222222222";
@@ -561,6 +562,97 @@ await test("findings cut by the row limit say how many were dropped", async () =
   eq(r.scan.findingsReturned, 1);
   eq(r.scan.findingsMatched, 3);
   eq(r.scan.findingsTruncated, 2);
+});
+
+suite("native PROS tracking");
+
+await test("decodeNativeTx rejects a zero-value call", () => {
+  eq(decodeNativeTx({ from: WHALE, to: ALICE, value: "0x0" }, 1).reason, "ZERO_VALUE");
+});
+
+await test("decodeNativeTx rejects a non-quantity value", () => {
+  eq(decodeNativeTx({ from: WHALE, to: ALICE, value: "12" }, 1).reason, "VALUE_NOT_QUANTITY");
+});
+
+await test("decodeNativeTx decodes a native movement", () => {
+  const d = decodeNativeTx(
+    { from: WHALE, to: ALICE, value: "0x1bc16d674ec80000", transactionIndex: "0x2" },
+    123,
+  );
+  assert(d.ok);
+  eq(d.native.from, WHALE.toLowerCase());
+  eq(d.native.to, ALICE.toLowerCase());
+  eq(d.native.valueRaw, 2000000000000000000n);
+  eq(d.native.blockNumber, 123);
+  eq(d.native.txIndex, 2);
+});
+
+await test("classifyNativeKind separates out, in, and self", () => {
+  eq(classifyNativeKind(true, false), "NATIVE_OUT");
+  eq(classifyNativeKind(false, true), "NATIVE_IN");
+  eq(classifyNativeKind(true, true), "NATIVE_SELF");
+});
+
+await test("scanNative reads block bodies and finds watched-native movement", async () => {
+  const chain = fakeChain({
+    nativeTxs: [
+      { from: WHALE, to: POOL, value: 10n ** 18n, block: 4900 },
+      { from: POOL, to: WHALE, value: 2n * 10n ** 18n, block: 4901 },
+    ],
+  });
+  const r = await scanNative(chain, { fromBlock: 4900, toBlock: 4901, watched: [WHALE] });
+  eq(r.blocksRead, 2);
+  eq(r.transfers.length, 2);
+  const out = r.transfers.find((t) => t.direction === "NATIVE_OUT");
+  assert(out, "expected a native out transfer");
+  eq(out.valueRaw, 10n ** 18n);
+});
+
+await test("scan reports native movement and balance delta in the watch summary", async () => {
+  const chain = fakeChain({
+    ...scanSpec,
+    nativeTxs: [{ from: WHALE, to: POOL, value: 2n * 10n ** 18n, block: 4500 }],
+    balances: {
+      [WHALE.toLowerCase()]: (block) => (block === 5000n ? 3n * 10n ** 18n : 1n * 10n ** 18n),
+      [ALICE.toLowerCase()]: () => 0n,
+    },
+  });
+  const r = await scan({ rpc: chain, hours: 1, minShareBps: 1, watch: [WHALE, ALICE] });
+  assert(r.ok, r.error);
+  eq(r.watch.native.length, 1);
+  const f = r.watch.native[0];
+  eq(f.token.symbol, NATIVE_SYMBOL);
+  eq(f.kind, "NATIVE_OUT");
+  eq(f.amountRaw, (2n * 10n ** 18n).toString());
+  const whale = r.watch.summary.find((s) => s.address === WHALE);
+  assert(whale);
+  eq(whale.nativeOut, 1);
+  eq(whale.nativeIn, 0);
+  eq(whale.nativeBalance, "3");
+  eq(whale.nativeDelta, "+2");
+  eq(whale.status, "ACTIVE");
+  assert(r.scan.native && !r.scan.native.partial);
+});
+
+await test("minPros filters native transfers below the value term", async () => {
+  const chain = fakeChain({
+    ...scanSpec,
+    nativeTxs: [
+      { from: WHALE, to: ALICE, value: 1n * 10n ** 18n, block: 4500 },
+      { from: ALICE, to: POOL, value: 5n * 10n ** 18n, block: 4600 },
+    ],
+  });
+  const r = await scan({ rpc: chain, hours: 1, minShareBps: 1, watch: [WHALE, ALICE], minPros: "2" });
+  assert(r.ok);
+  eq(r.watch.native.length, 1);
+  eq(r.watch.native[0].amount, "5");
+});
+
+await test("minPros must be a decimal string of native PROS", async () => {
+  const chain = fakeChain(scanSpec);
+  eq((await scan({ rpc: chain, hours: 1, minPros: "1e18" })).code, "BAD_MIN_PROS");
+  eq((await scan({ rpc: chain, hours: 1, minPros: "-1" })).code, "BAD_MIN_PROS");
+  eq((await scan({ rpc: chain, hours: 1, minPros: "1,5" })).code, "BAD_MIN_PROS");
 });
 
 report();

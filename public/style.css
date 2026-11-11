@@ -158,6 +158,9 @@ td.share { font-family: var(--mono); font-variant-numeric: tabular-nums; font-we
 .kind { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
 .kind.mint, .kind.active { color: #0f7b3f; }
 .kind.burn { color: var(--bad); }
+.kind.native_out { color: #0f7b3f; }
+.kind.native_in { color: var(--accent); }
+.kind.native_self { color: var(--muted); }
 
 .empty { color: var(--muted); padding: 18px 0; }
 

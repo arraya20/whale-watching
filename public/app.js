@@ -22,6 +22,7 @@ const rows = $("rows");
 const watchSection = $("watchSection");
 const watchSummaryRows = $("watchSummaryRows");
 const watchRows = $("watchRows");
+const nativeRows = $("nativeRows");
 const skipped = $("skipped");
 const skippedList = $("skippedList");
 
@@ -43,6 +44,7 @@ function clearSections() {
   rows.replaceChildren();
   if (watchSummaryRows) watchSummaryRows.replaceChildren();
   watchRows.replaceChildren();
+  if (nativeRows) nativeRows.replaceChildren();
   skippedList.replaceChildren();
 }
 
@@ -65,6 +67,10 @@ function kindCell(kind) {
 function addrCell(address, label) {
   const td = document.createElement("td");
   td.className = "addr";
+  if (!address) {
+    td.textContent = "—";
+    return td;
+  }
   td.title = address;
   td.textContent = label ? `${short(address)} (${label})` : short(address);
   return td;
@@ -99,6 +105,23 @@ function renderWatchSummaryRow(s) {
   tr.appendChild(cell(String(s.significantTouches ?? 0), "num"));
   tr.appendChild(cell(`${s.maxShareBps ?? 0} bps`, "mono"));
   tr.appendChild(cell(Array.isArray(s.tokens) && s.tokens.length ? s.tokens.join(", ") : "—", "mono"));
+  tr.appendChild(cell(String(s.nativeIn ?? 0), "num"));
+  tr.appendChild(cell(String(s.nativeOut ?? 0), "num"));
+  tr.appendChild(cell(s.nativeBalance ?? "—", "num"));
+  tr.appendChild(cell(s.nativeDelta ?? "—", "num"));
+  return tr;
+}
+
+function renderNativeRow(f) {
+  const tr = document.createElement("tr");
+  if (f.explanation) tr.title = f.explanation;
+  tr.appendChild(cell(f.direction, "mono"));
+  tr.appendChild(cell(f.token.symbol, "mono"));
+  tr.appendChild(cell(f.amount, "num"));
+  tr.appendChild(kindCell(f.kind));
+  tr.appendChild(addrCell(f.from, f.fromLabel));
+  tr.appendChild(addrCell(f.to, f.toLabel));
+  tr.appendChild(cell(String(f.blockNumber), "mono"));
   return tr;
 }
 
@@ -117,6 +140,9 @@ function renderMeta(s, limits) {
     ["chunks", `${s.chunksRead} of ${s.chunksPlanned} read`],
     ["transfers", `${s.transfersDecoded} decoded of ${s.transfersRead} read, ${s.transfersRanked} rankable${s.transfersUnranked ? `, ${s.transfersUnranked} unmeasurable` : ""}`],
     ["tokens", String(s.tokensSeen)],
+    ...(s.native
+      ? [["native PROS", `blocks ${s.native.fromBlock}–${s.native.toBlock}, ${s.native.transfersReported} reported${s.native.partial ? ", partial" : ""}`]]
+      : []),
     ["took", `${s.durationMs} ms`],
   ];
   meta.replaceChildren();
@@ -213,6 +239,17 @@ function render(data) {
     } else {
       for (const f of data.watch.activity) watchRows.appendChild(renderRow(f, true));
     }
+    if (nativeRows) {
+      if (Array.isArray(data.watch.native) && data.watch.native.length) {
+        for (const f of data.watch.native) nativeRows.appendChild(renderNativeRow(f));
+      } else {
+        const tr = document.createElement("tr");
+        const td = cell("No native PROS activity for the watched addresses in this window.", "empty");
+        td.colSpan = 7;
+        tr.appendChild(td);
+        nativeRows.appendChild(tr);
+      }
+    }
   }
 
   renderSkipped(data.skipped);
@@ -237,6 +274,7 @@ async function run() {
   const params = new URLSearchParams();
   params.set("hours", data.get("hours"));
   params.set("minShareBps", data.get("minShareBps"));
+  params.set("minPros", data.get("minPros"));
   params.set("limit", data.get("limit"));
 
   const watch = String(data.get("watch") ?? "")

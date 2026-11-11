@@ -32,6 +32,9 @@
         <option value="100">1%</option>
       </select>
     </label>
+    <label>Min PROS
+      <input name="minPros" value="0" placeholder="0" spellcheck="false">
+    </label>
     <label>Rows
       <select name="limit">
         <option value="20" selected>20</option>
@@ -62,13 +65,18 @@
   <section id="watchSection" class="watch" hidden>
     <h2>Watched addresses summary</h2>
     <table id="watchSummaryTable">
-      <thead><tr><th>Address</th><th>Label</th><th>Status</th><th>In</th><th>Out</th><th>Significant</th><th>Max share</th><th>Tokens</th></tr></thead>
+      <thead><tr><th>Address</th><th>Label</th><th>Status</th><th>In</th><th>Out</th><th>Significant</th><th>Max share</th><th>Tokens</th><th>Native in</th><th>Native out</th><th>Balance</th><th>Δ</th></tr></thead>
       <tbody id="watchSummaryRows"></tbody>
     </table>
     <h2>Watchlist activity</h2>
     <table id="watchTable">
       <thead><tr><th>Dir</th><th>Share</th><th>Token</th><th>Amount</th><th>Kind</th><th>From</th><th>To</th><th>Block</th></tr></thead>
       <tbody id="watchRows"></tbody>
+    </table>
+    <h2>Native PROS activity</h2>
+    <table id="nativeTable">
+      <thead><tr><th>Dir</th><th>Token</th><th>Amount</th><th>Kind</th><th>From</th><th>To</th><th>Block</th></tr></thead>
+      <tbody id="nativeRows"></tbody>
     </table>
   </section>
   <section id="skipped" class="skipped" hidden>

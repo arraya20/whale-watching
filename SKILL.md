@@ -17,14 +17,15 @@ Query parameters, intent only:
 - `hours` — window, at most 6, one or two decimal places;
 - `threshold` — `minShareBps`, the size that counts as large, as basis points of
   total supply (`0..10000`);
+- `minPros` — minimum native PROS value to report, a decimal string (default `"0"`);
 - `limit` — rows, `1..100`;
 - `watch` — optional allowlisted addresses to highlight, at most 20 (defaults to 5 canonical/active Pharos addresses when omitted).
 
-Transfers, amounts, balances, token metadata, verdicts and `watchedAddresses`
-supplied by the caller are refused. The scaffold this replaced accepted `from`,
-`to`, `amountWei` and the watchlist from the requester, so the caller defined
-what a whale was and the "detection" was arithmetic over the caller's own claim.
-A tracker that believes its requester is not a tracker.
+Transfers, amounts, balances, token metadata, verdicts, `value`, `nativeValue`
+and `watchedAddresses` supplied by the caller are refused. The scaffold this
+replaced accepted `from`, `to`, `amountWei` and the watchlist from the requester,
+so the caller defined what a whale was and the "detection" was arithmetic over
+the caller's own claim. A tracker that believes its requester is not a tracker.
 
 ## Procedure
 
@@ -33,14 +34,17 @@ A tracker that believes its requester is not a tracker.
 2. Measure block time from the chain. Window sizing in hours depends on it, and
    an assumed value silently scans the wrong span.
 3. Chunk the window, bounded to 6000 blocks (`maxChunks`), and read transfer logs.
-4. Resolve each token's decimals and total supply from the chain.
-5. Rank by share of supply in basis points, not by an absolute wei amount.
+4. Read native PROS from block bodies (`eth_getBlockByNumber(n, true)`) over a
+   separate 4000-block cap, batched and fail-soft: a native gap reports
+   `scan.native.partial` but never invalidates the ERC-20 findings.
+5. Resolve each token's decimals and total supply from the chain.
+6. Rank by share of supply in basis points, not by an absolute wei amount.
    Decimals differ per asset — USDC is 6, WPROS 18 — so a wei threshold ranks
    assets by their scale rather than by the size of the movement.
-6. Return the largest movements with block, token, exact base-unit
+7. Return the largest movements with block, token, exact base-unit
    amount, share of supply, labelled counterparties (`fromLabel`, `toLabel`),
-   human-readable `explanation`, and a per-address `watch.summary` across all
-   watched addresses.
+   human-readable `explanation`, a per-address `watch.summary` (with native
+   balance, delta, in/out counts), and `watch.native` for native PROS movement.
 
 ## Output requirement
 
@@ -48,9 +52,9 @@ Include the measured block time, the window actually scanned, the requested
 threshold, and the scan limits. Amounts stay exact integers with their decimals.
 
 Status codes: `400` for `BAD_HOURS`, `BAD_THRESHOLD`, `BAD_LIMIT`, `BAD_WATCH`,
-`BAD_WATCH_ADDRESS`; `409` for `WRONG_CHAIN`; `502` for `RPC_UNAVAILABLE`,
-`BLOCK_TIME_UNAVAILABLE`, `SCAN_UNAVAILABLE`, `METADATA_UNAVAILABLE` — an unreadable
-chain is not a finding of "nothing happened".
+`BAD_WATCH_ADDRESS`, `BAD_MIN_PROS`; `409` for `WRONG_CHAIN`; `502` for
+`RPC_UNAVAILABLE`, `BLOCK_TIME_UNAVAILABLE`, `SCAN_UNAVAILABLE`,
+`METADATA_UNAVAILABLE` — an unreadable chain is not a finding of "nothing happened".
 
 Report the window you actually covered, not the one that was requested: a capped or
 partial scan returns `blocksRequested`, `windowBlocks`, `blocksScanned`,
