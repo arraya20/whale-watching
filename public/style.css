@@ -156,7 +156,7 @@ td.addr { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 td.share { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 600; }
 
 .kind { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
-.kind.mint { color: #0f7b3f; }
+.kind.mint, .kind.active { color: #0f7b3f; }
 .kind.burn { color: var(--bad); }
 
 .empty { color: var(--muted); padding: 18px 0; }

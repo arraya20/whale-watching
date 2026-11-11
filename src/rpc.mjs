@@ -138,10 +138,14 @@ export function createRpc({
         await sleep(Math.min(3000, 400 * 2 ** attempt));
       }
     }
-    throw new RpcError(
-      `${method} gave up after ${maxAttempts} attempts: ${lastError?.message ?? "unknown"}`,
-      { code: lastError?.code ?? null, status: lastError?.status ?? null },
-    );
+    // Carry the cause's classification forward. Dropping `retryable` here made a
+    // gave-up throttle indistinguishable from a contract that answered nothing,
+    // which is the difference between "unavailable" and "not an ERC-20".
+    throw new RpcError(`${method} gave up after ${maxAttempts} attempts: ${lastError?.message ?? "unknown"}`, {
+      code: lastError?.code ?? null,
+      status: lastError?.status ?? null,
+      retryable: lastError?.retryable === true,
+    });
   }
 
   // Convenience wrappers. `scan` itself only uses `call`, which is what lets the

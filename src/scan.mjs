@@ -12,7 +12,7 @@ import { scanRange } from "./logs.mjs";
 import { createTokenCache, TRANSFER_TOPIC } from "./tokens.mjs";
 import { decodeTransferLog, toFinding } from "./whales.mjs";
 import { rankFindings } from "./share.mjs";
-import { normalizeAddress } from "./address.mjs";
+import { normalizeAddress, DEFAULT_WATCHLIST, labelAddress } from "./address.mjs";
 
 export const PHAROS_CHAIN_ID = 1672n;
 export const DEFAULT_HEAD_URL = "https://rpc.pharos.xyz";
@@ -57,7 +57,7 @@ export async function scan({
   hours = 1,
   minShareBps = 1,
   limit = 20,
-  watch = [],
+  watch = DEFAULT_WATCHLIST,
   rpcUrl = DEFAULT_HEAD_URL,
   rpc,
 } = {}) {
@@ -114,8 +114,12 @@ export async function scan({
   }
 
   const requestedBlocks = Math.max(1, Math.round((hours * 3600) / blockTime));
-  const capped = Math.min(requestedBlocks, LIMITS.maxChunks * 1000);
+  const capBlocks = LIMITS.maxChunks * 1000;
+  const capped = Math.min(requestedBlocks, capBlocks);
   const fromBlock = Math.max(0, head - capped + 1);
+  // The chain is finite: asking for a window wider than the chain gives a
+  // shorter one, and that has to be visible rather than assumed away.
+  const windowBlocks = head - fromBlock + 1;
 
   let range;
   try {
@@ -151,35 +155,122 @@ export async function scan({
   }
 
   const tokens = createTokenCache(client);
+  const dynamicLabels = new Map();
   for (const address of new Set(transfers.map((t) => t.token.toLowerCase()))) {
     const meta = await tokens.get(address);
-    if (!meta.ok) bump(meta.reason);
+    if (!meta.ok) bump(meta.reason.split(":")[0]);
+    else dynamicLabels.set(address, `${meta.token.symbol} Token Contract`);
   }
+  watched.forEach((addr, idx) => {
+    const k = addr.toLowerCase();
+    if (!labelAddress(addr, dynamicLabels)) {
+      dynamicLabels.set(k, `Watched #${idx + 1}`);
+    }
+  });
 
   const findings = [];
   const watchedActivity = [];
+  const watchStats = new Map(
+    watched.map((addr) => [
+      addr.toLowerCase(),
+      {
+        address: addr,
+        label: labelAddress(addr, dynamicLabels),
+        inCount: 0,
+        outCount: 0,
+        totalTouches: 0,
+        significantTouches: 0,
+        maxShareBps: 0,
+        tokensMoved: new Set(),
+      },
+    ]),
+  );
   let unreadableTokenTransfers = 0;
+  let metadataUnavailable = 0;
+  let metadataInvalid = 0;
 
   for (const transfer of transfers) {
     const meta = await tokens.get(transfer.token.toLowerCase());
     if (!meta.ok) {
       unreadableTokenTransfers++;
+      if (meta.transient) metadataUnavailable++;
+      else metadataInvalid++;
       continue;
     }
-    const finding = toFinding(transfer, meta.token);
-    const touchesWatch =
-      watchedLower.has(transfer.from.toLowerCase()) || watchedLower.has(transfer.to.toLowerCase());
+    const finding = toFinding(transfer, meta.token, dynamicLabels);
+    const fromLow = transfer.from.toLowerCase();
+    const toLow = transfer.to.toLowerCase();
+    const touchesWatch = watchedLower.has(fromLow) || watchedLower.has(toLow);
+    const isSignificant = BigInt(finding.shareBpsRaw) >= BigInt(minShareBps);
 
     if (touchesWatch) {
-      watchedActivity.push({ ...finding, direction: watchedLower.has(transfer.from.toLowerCase()) ? "OUT" : "IN" });
+      const direction = watchedLower.has(fromLow) && watchedLower.has(toLow)
+        ? "SELF"
+        : watchedLower.has(fromLow)
+        ? "OUT"
+        : "IN";
+      watchedActivity.push({ ...finding, direction });
+
+      if (watchStats.has(fromLow)) {
+        const st = watchStats.get(fromLow);
+        st.outCount++;
+        st.totalTouches++;
+        if (isSignificant) st.significantTouches++;
+        if (finding.shareBps > st.maxShareBps) st.maxShareBps = finding.shareBps;
+        st.tokensMoved.add(meta.token.symbol);
+      }
+      if (toLow !== fromLow && watchStats.has(toLow)) {
+        const st = watchStats.get(toLow);
+        st.inCount++;
+        st.totalTouches++;
+        if (isSignificant) st.significantTouches++;
+        if (finding.shareBps > st.maxShareBps) st.maxShareBps = finding.shareBps;
+        st.tokensMoved.add(meta.token.symbol);
+      }
     }
-    if (finding.shareBpsRaw >= BigInt(minShareBps)) findings.push(finding);
+    if (isSignificant) findings.push(finding);
+  }
+
+  // Every token was unreadable for an availability reason: the scan looked and
+  // saw nothing, but not because nothing happened. Ranking over an empty set
+  // here would be a report about the endpoint's mood, not about the chain.
+  const tokensSeenCount = tokens.size;
+  if (unreadableTokenTransfers > 0 && metadataInvalid === 0 && metadataUnavailable > 0) {
+    const all = [...tokens.entries()].every(([, r]) => !r.ok && r.transient);
+    if (all) {
+      return fail(
+        "METADATA_UNAVAILABLE",
+        `none of the ${tokensSeenCount} token contract(s) in this window could be read; ` +
+          `the transfers were seen but none can be ranked against a total supply`,
+        {
+          scan: {
+            chunksRead: range.chunksRead,
+            chunksPlanned: range.chunksPlanned,
+            transfersRead: range.logs.length,
+            tokensSeen: tokensSeenCount,
+            metadataUnavailable,
+          },
+        },
+      );
+    }
   }
 
   const ranked = rankFindings(findings).slice(0, limit);
+  const rankedWatchActivity = rankFindings(watchedActivity).slice(0, limit);
+  const watchSummary = [...watchStats.values()].map((st) => ({
+    address: st.address,
+    label: st.label,
+    inCount: st.inCount,
+    outCount: st.outCount,
+    totalTouches: st.totalTouches,
+    significantTouches: st.significantTouches,
+    maxShareBps: st.maxShareBps,
+    tokens: [...st.tokensMoved],
+    status: st.totalTouches > 0 ? "ACTIVE" : "QUIET",
+  }));
 
   // Token counts, for the response header. Read from the cache, not assumed.
-  const tokensSeen = tokens.size;
+  const tokensSeen = tokensSeenCount;
 
   return {
     ok: true,
@@ -189,8 +280,16 @@ export async function scan({
       fromBlock,
       toBlock: head,
       blocksRequested: requestedBlocks,
+      blocksCap: capBlocks,
+      windowBlocks,
       blocksScanned: range.blocksRead,
+      // blocksCapped alone never said how much of the window survived. These
+      // three do: what was asked for, what the caps allowed, what was read.
       blocksCapped: requestedBlocks > capped,
+      capTruncatedBlocks: requestedBlocks > capped ? requestedBlocks - capped : 0,
+      windowCoverageBps: windowBlocks > 0 ? Math.floor((range.blocksRead * 10000) / windowBlocks) : 0,
+      windowSecondsCovered: Math.round((range.blocksRead * blockTime) * 100) / 100,
+      windowSecondsRequested: Math.round(hours * 3600),
       blockTimeSeconds: Number(blockTime.toFixed(4)),
       chunksPlanned: range.chunksPlanned,
       chunksRead: range.chunksRead,
@@ -200,12 +299,26 @@ export async function scan({
       transfersRead: range.logs.length,
       transfersDecoded: transfers.length,
       transfersRanked: transfers.length - unreadableTokenTransfers,
+      transfersUnranked: unreadableTokenTransfers,
+      metadataUnavailable,
+      metadataInvalid,
+      // partial means chunks failed; degraded means some transfers were seen but
+      // could not be measured, so the ranking is over a subset of what moved.
+      degraded: range.partial || unreadableTokenTransfers > 0,
       tokensSeen,
+      // The row limit cuts the list, not the market. Say how many were matched.
+      findingsMatched: findings.length,
+      findingsReturned: ranked.length,
+      findingsTruncated: Math.max(0, findings.length - ranked.length),
       durationMs: Date.now() - started,
     },
     threshold: { minShareBps },
     skipped: [...skipped.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
     findings: ranked,
-    watch: { addresses: watched, activity: watchedActivity.slice(0, limit) },
+    watch: {
+      addresses: watched,
+      summary: watchSummary,
+      activity: rankedWatchActivity,
+    },
   };
 }

@@ -33,7 +33,15 @@ const BAD_REQUEST = new Set([
 
 // The chain could not be read. Not the caller's fault, and definitely not a
 // finding of "nothing happened".
-const UPSTREAM = new Set(["RPC_UNAVAILABLE", "BLOCK_TIME_UNAVAILABLE", "SCAN_UNAVAILABLE"]);
+const UPSTREAM = new Set([
+  "RPC_UNAVAILABLE",
+  "BLOCK_TIME_UNAVAILABLE",
+  "SCAN_UNAVAILABLE",
+  // Transfers were read but no token contract could tell us its supply. That is
+  // the endpoint failing us, not a quiet market, so it must not read as 500 or
+  // as an empty 200.
+  "METADATA_UNAVAILABLE",
+]);
 
 // The endpoint is not the chain this tool understands.
 const CONFLICT = new Set(["WRONG_CHAIN"]);
@@ -92,12 +100,12 @@ export async function onRequestGet(context) {
     );
   }
 
-  const watch = params.getAll("watch");
+  const rawWatch = params.getAll("watch").map((v) => v.trim()).filter(Boolean);
   const options = {
     hours: parseHours(params.get("hours"), 1),
     minShareBps: parseNumber(params.get("minShareBps"), 1),
     limit: parseNumber(params.get("limit"), 20),
-    watch,
+    ...(rawWatch.length > 0 ? { watch: rawWatch } : {}),
     rpcUrl: env?.PHAROS_RPC_URL || undefined,
   };
 

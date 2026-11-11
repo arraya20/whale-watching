@@ -120,6 +120,7 @@ export function fakeChain(spec = {}) {
     logs = [],
     tokens = {},
     failFrom = new Set(),
+    failTokens = new Set(),
     rawLogs = null,
   } = spec;
 
@@ -128,6 +129,11 @@ export function fakeChain(spec = {}) {
 
   function ethCall(params) {
     const { to, data } = params[0] ?? {};
+    // Simulates the endpoint throttling a getter, which is not the same as the
+    // contract answering nothing.
+    if (failTokens.has(String(to).toLowerCase())) {
+      throw Object.assign(new Error("cu limit exceeded"), { rpcCode: -32011, retryable: true });
+    }
     const token = tokens[String(to).toLowerCase()];
     if (!token) return "0x";
     if (data === SELECTOR.decimals) return "0x" + word(token.decimals);

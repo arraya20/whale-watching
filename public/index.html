@@ -39,8 +39,8 @@
         <option value="100">100</option>
       </select>
     </label>
-    <label class="grow">Watch (comma separated, optional)
-      <input name="watch" placeholder="0x…, 0x…" spellcheck="false">
+    <label class="grow">Watch (comma separated, defaults to 5 Pharos addresses)
+      <input name="watch" value="0x707E665B1a46319AB82AF7E300F0c92b3a279325, 0x75E54ACb9107Cc35969b44Eb6342F50686b3A12d, 0x0000000071727De22E5E9d8BAf0edAc6f37da032, 0x52C48d4213107b20bC583832b0d951FB9CA8F0B0, 0xC879C018dB60520F4355C26eD1a6D572cdAC1815" placeholder="0x…, 0x…" spellcheck="false">
     </label>
     <button type="submit" id="go">Scan</button>
   </form>
@@ -60,9 +60,14 @@
     </table>
   </section>
   <section id="watchSection" class="watch" hidden>
+    <h2>Watched addresses summary</h2>
+    <table id="watchSummaryTable">
+      <thead><tr><th>Address</th><th>Label</th><th>Status</th><th>In</th><th>Out</th><th>Significant</th><th>Max share</th><th>Tokens</th></tr></thead>
+      <tbody id="watchSummaryRows"></tbody>
+    </table>
     <h2>Watchlist activity</h2>
     <table id="watchTable">
-      <thead><tr><th>Dir</th><th>Share</th><th>Token</th><th>Amount</th><th>From</th><th>To</th><th>Block</th></tr></thead>
+      <thead><tr><th>Dir</th><th>Share</th><th>Token</th><th>Amount</th><th>Kind</th><th>From</th><th>To</th><th>Block</th></tr></thead>
       <tbody id="watchRows"></tbody>
     </table>
   </section>

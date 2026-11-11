@@ -20,6 +20,7 @@ const gap = $("gap");
 const results = $("results");
 const rows = $("rows");
 const watchSection = $("watchSection");
+const watchSummaryRows = $("watchSummaryRows");
 const watchRows = $("watchRows");
 const skipped = $("skipped");
 const skippedList = $("skippedList");
@@ -40,6 +41,7 @@ function clearSections() {
   watchSection.hidden = true;
   skipped.hidden = true;
   rows.replaceChildren();
+  if (watchSummaryRows) watchSummaryRows.replaceChildren();
   watchRows.replaceChildren();
   skippedList.replaceChildren();
 }
@@ -60,8 +62,17 @@ function kindCell(kind) {
   return td;
 }
 
+function addrCell(address, label) {
+  const td = document.createElement("td");
+  td.className = "addr";
+  td.title = address;
+  td.textContent = label ? `${short(address)} (${label})` : short(address);
+  return td;
+}
+
 function renderRow(f, withDirection) {
   const tr = document.createElement("tr");
+  if (f.explanation) tr.title = f.explanation;
   if (withDirection) tr.appendChild(cell(f.direction, "mono"));
 
   // sharePercent arrives as an exact decimal string from integer arithmetic
@@ -70,19 +81,41 @@ function renderRow(f, withDirection) {
   tr.appendChild(cell(f.token.symbol, "mono"));
   tr.appendChild(cell(f.amount, "num"));
   tr.appendChild(kindCell(f.kind));
-  tr.appendChild(cell(short(f.from), "addr"));
-  tr.appendChild(cell(short(f.to), "addr"));
+  tr.appendChild(addrCell(f.from, f.fromLabel));
+  tr.appendChild(addrCell(f.to, f.toLabel));
   tr.appendChild(cell(String(f.blockNumber), "mono"));
   return tr;
 }
 
+function renderWatchSummaryRow(s) {
+  const tr = document.createElement("tr");
+  const addrTd = cell(short(s.address), "addr");
+  addrTd.title = s.address;
+  tr.appendChild(addrTd);
+  tr.appendChild(cell(s.label ?? "—"));
+  tr.appendChild(kindCell(s.status ?? "QUIET"));
+  tr.appendChild(cell(String(s.inCount ?? 0), "num"));
+  tr.appendChild(cell(String(s.outCount ?? 0), "num"));
+  tr.appendChild(cell(String(s.significantTouches ?? 0), "num"));
+  tr.appendChild(cell(`${s.maxShareBps ?? 0} bps`, "mono"));
+  tr.appendChild(cell(Array.isArray(s.tokens) && s.tokens.length ? s.tokens.join(", ") : "—", "mono"));
+  return tr;
+}
+
 function renderMeta(s, limits) {
+  // The window is three numbers, not one: what the caller asked for, what the
+  // block caps allowed, and what was actually read. Showing only the first makes
+  // a truncated scan look like a full one.
+  const coverage = s.windowCoverageBps == null ? null : (s.windowCoverageBps / 100).toFixed(1);
   const lines = [
     ["window", `blocks ${s.fromBlock}–${s.toBlock} (${s.blocksScanned.toLocaleString()} scanned of ${s.blocksRequested.toLocaleString()} requested)`],
+    ...(coverage === null
+      ? []
+      : [["coverage", `${s.windowSecondsCovered}s read of ${s.windowSecondsRequested}s requested (${coverage}% of the window)`]]),
     ["head block", s.headBlock.toLocaleString()],
     ["block time", `${s.blockTimeSeconds}s`],
     ["chunks", `${s.chunksRead} of ${s.chunksPlanned} read`],
-    ["transfers", `${s.transfersDecoded} decoded of ${s.transfersRead} read, ${s.transfersRanked} rankable`],
+    ["transfers", `${s.transfersDecoded} decoded of ${s.transfersRead} read, ${s.transfersRanked} rankable${s.transfersUnranked ? `, ${s.transfersUnranked} unmeasurable` : ""}`],
     ["tokens", String(s.tokensSeen)],
     ["took", `${s.durationMs} ms`],
   ];
@@ -96,7 +129,9 @@ function renderMeta(s, limits) {
   }
   if (s.blocksCapped) {
     const div = document.createElement("div");
-    div.textContent = `window capped at the ${limits.maxChunks * 1000} block limit`;
+    div.textContent =
+      `window truncated: ${s.capTruncatedBlocks?.toLocaleString?.() ?? "some"} blocks of the requested ` +
+      `span were dropped by the ${limits.maxChunks * 1000} block cap, so this is not the whole requested period`;
     meta.appendChild(div);
   }
   meta.hidden = false;
@@ -147,7 +182,11 @@ function render(data) {
     rows.replaceChildren();
     const tr = document.createElement("tr");
     const td = cell(
-      s.partial
+      s.transfersUnranked > 0
+        ? `Nothing could be ranked: ${s.transfersUnranked} transfer(s) touched a token whose metadata ` +
+          `could not be read (${s.metadataUnavailable} unavailable, ${s.metadataInvalid} not ERC-20). ` +
+          `This is not an empty window.`
+        : s.partial
         ? "No transfers above the threshold in the ranges that were read."
         : "No transfers above the threshold in this window.",
       "empty",
@@ -162,6 +201,9 @@ function render(data) {
 
   if (data.watch.addresses.length > 0) {
     watchSection.hidden = false;
+    if (watchSummaryRows && Array.isArray(data.watch.summary)) {
+      for (const s of data.watch.summary) watchSummaryRows.appendChild(renderWatchSummaryRow(s));
+    }
     if (data.watch.activity.length === 0) {
       const tr = document.createElement("tr");
       const td = cell("No activity for the watched addresses in this window.", "empty");
@@ -178,6 +220,8 @@ function render(data) {
   const parts = [`${data.findings.length} transfer${data.findings.length === 1 ? "" : "s"} above`];
   parts.push(`${data.threshold.minShareBps} bps`);
   if (s.partial) parts.push(`partial: ${s.failedChunkCount} range(s) unread`);
+  if (s.findingsTruncated > 0) parts.push(`showing ${data.findings.length} of ${s.findingsMatched}`);
+  if (s.transfersUnranked > 0) parts.push(`${s.transfersUnranked} unmeasurable`);
   setStatus(parts.join(" · "), s.partial ? "" : "");
 }
 

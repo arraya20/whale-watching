@@ -37,12 +37,12 @@ displayed number can only ever be smaller than the real one.
 GET /api/whales?hours=1&minShareBps=1&watch=0x75E54ACb9107Cc35969b44Eb6342F50686b3A12d
 ```
 
-| parameter     | meaning                              | bounds                  |
-| ------------- | ------------------------------------ | ----------------------- |
-| `hours`       | how far back to scan                 | 0.05 – 6, up to 2 dp    |
-| `minShareBps` | minimum share of supply, in bps      | integer 0 – 10000       |
-| `limit`       | maximum findings returned            | integer 1 – 100         |
-| `watch`       | address to watch (repeatable)        | max 20, EIP-55 required |
+| parameter     | meaning                              | bounds                                      |
+| ------------- | ------------------------------------ | ------------------------------------------- |
+| `hours`       | how far back to scan                 | 0.05 – 6, up to 2 dp                        |
+| `minShareBps` | minimum share of supply, in bps      | integer 0 – 10000                           |
+| `limit`       | maximum findings returned            | integer 1 – 100                             |
+| `watch`       | address to watch (repeatable)        | max 20, EIP-55 required (defaults to 5)     |
 
 The caller supplies **intent only**. Supplying a fact — `from`, `to`, `amountWei`,
 `decimals`, `totalSupply`, `verdict`, `watchedAddresses` and similar names — is
@@ -59,8 +59,14 @@ fact still leaves the caller believing it was applied.
     "headBlock": 22156107,
     "fromBlock": 22152891,
     "blocksRequested": 3217,
+    "blocksCap": 6000,
+    "windowBlocks": 3217,
     "blocksScanned": 3217,
     "blocksCapped": false,
+    "capTruncatedBlocks": 0,
+    "windowCoverageBps": 10000,
+    "windowSecondsCovered": 3600,
+    "windowSecondsRequested": 3600,
     "blockTimeSeconds": 1.119,
     "chunksPlanned": 4,
     "chunksRead": 4,
@@ -78,19 +84,38 @@ fact still leaves the caller believing it was applied.
       "token": { "address": "0x…", "symbol": "PROPRO", "decimals": 18, "totalSupply": "…" },
       "kind": "TRANSFER",
       "from": "0x707E665B1a46319AB82AF7E300F0c92b3a279325",
+      "fromLabel": "PROPRO Active Mover",
       "to": "0x75E54ACb9107Cc35969b44Eb6342F50686b3A12d",
+      "toLabel": "PROPRO Liquidity Counterparty",
       "amountRaw": "528479988729089059",
       "amount": "0.528479",
       "amountExact": "0.528479988729089059",
       "shareBpsRaw": "86",
       "shareBps": 86,
       "sharePercent": "0.8653",
+      "explanation": "Moved 0.528479 PROPRO (0.8653% of supply) from 0x707E665B1a46319AB82AF7E300F0c92b3a279325 (PROPRO Active Mover) to 0x75E54ACb9107Cc35969b44Eb6342F50686b3A12d (PROPRO Liquidity Counterparty)",
       "blockNumber": 22154961,
       "logIndex": 12,
       "txHash": "0x…"
     }
   ],
-  "watch": { "addresses": ["0x…"], "activity": [] },
+  "watch": {
+    "addresses": ["0x707E665B1a46319AB82AF7E300F0c92b3a279325", "…"],
+    "summary": [
+      {
+        "address": "0x707E665B1a46319AB82AF7E300F0c92b3a279325",
+        "label": "PROPRO Active Mover",
+        "inCount": 0,
+        "outCount": 1,
+        "totalTouches": 1,
+        "significantTouches": 1,
+        "maxShareBps": 86,
+        "tokens": ["PROPRO"],
+        "status": "ACTIVE"
+      }
+    ],
+    "activity": []
+  },
   "skipped": [{ "reason": "AMOUNT_DATA_NOT_ONE_WORD", "count": 3 }],
   "limits": { "maxHours": 6, "maxChunks": 6, "maxLimit": 100, "maxWatch": 20 }
 }
@@ -110,6 +135,8 @@ look" must never be the same answer.**
 | endpoint is not chain 1672             | `409 WRONG_CHAIN`, no logs read            |
 | RPC unreachable                        | `502 RPC_UNAVAILABLE`                      |
 | `totalSupply` is zero                  | token skipped as `TOTAL_SUPPLY_ZERO`       |
+| every token's metadata was throttled   | `502 METADATA_UNAVAILABLE`                 |
+| some tokens' metadata was throttled    | `200`, `degraded: true`, `transfersUnranked` |
 | token does not answer `decimals()`     | token skipped as `DECIMALS_UNREADABLE`     |
 | log amount is not exactly one word     | skipped as `AMOUNT_DATA_NOT_ONE_WORD`      |
 | log is marked `removed` (reorg)        | skipped as `REORGED`                       |
@@ -118,6 +145,14 @@ look" must never be the same answer.**
 
 A skipped transfer is counted with its reason and left out of the ranking. It is
 never shown with a guessed amount, symbol or decimals.
+
+Metadata failures are split the same way, because "the contract answered nothing"
+and "the endpoint would not let us ask" are opposite facts. An unusable answer
+(`DECIMALS_UNREADABLE`, `TOTAL_SUPPLY_ZERO`) is a verdict about the contract. A
+throttled `eth_call` is `METADATA_UNAVAILABLE`, is counted in
+`scan.metadataUnavailable` rather than `metadataInvalid`, and if every token in
+the window is unmeasurable the scan fails with `502` instead of returning an empty
+ranking — transfers that were seen but cannot be measured are not an empty market.
 
 ## Two endpoint limits, measured
 
@@ -136,8 +171,14 @@ because it is not 12s and not 6s — the live sample above came back at 1.119s.
 ## Limits
 
 - `maxHours: 6`, `maxChunks: 6` — a scan never exceeds 6000 blocks regardless of
-  block time. A window wider than that is **capped** and reported as
-  `blocksCapped: true`, not rejected.
+  block time. A window wider than that is **capped**, not rejected, and the
+  response says so in three numbers instead of one: `blocksRequested` (what the
+  caller asked for), `windowBlocks` (what the caps allowed) and `blocksScanned`
+  (what was actually read). On this chain with 1.1s blocks, `hours=6` is a request
+  for 19,000+ blocks that the cap answers with 6000 — about 110 minutes. So a
+  capped response carries `capTruncatedBlocks`, `windowSecondsCovered` and
+  `windowCoverageBps`, because `blocksCapped: true` alone did not tell a reader
+  that "6 hours" was really "1.8 hours".
 - No pagination across windows: one request covers one window.
 - `SELF` transfers are ranked, since moving 1% of supply to yourself is still a
   movement worth seeing.
@@ -145,7 +186,7 @@ because it is not 12s and not 6s — the live sample above came back at 1.119s.
 ## Running
 
 ```
-npm test              # 53 unit + 16 API, offline, no network
+npm test              # 61 unit + 18 API, offline, no network
 npm run test:live     # 14 tests against rpc.pharos.xyz
 npm run verify:chain  # independent recomputation, 16 checks
 npm run dev           # wrangler pages dev on :8781

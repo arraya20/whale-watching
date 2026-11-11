@@ -1,7 +1,7 @@
 import { suite, test, assert, eq, throws, report, fakeChain, transferLog, encodeString, encodeBytes32, TRANSFER_TOPIC } from "./harness.mjs";
 
 import { isHex, decodeUint, decodeSingleWord, decodeAddressTopic, toWord } from "../src/hex.mjs";
-import { toChecksumAddress, normalizeAddress, isZeroAddress } from "../src/address.mjs";
+import { toChecksumAddress, normalizeAddress, isZeroAddress, DEFAULT_WATCHLIST, labelAddress } from "../src/address.mjs";
 import { shareBps, sharePercent, rankFindings } from "../src/share.mjs";
 import { formatRaw, formatRawShort, parseDecimal } from "../src/numbers.mjs";
 import { decodeSymbol, readToken, createTokenCache } from "../src/tokens.mjs";
@@ -120,6 +120,15 @@ await test("wrong length is named, not truncated", () => {
 await test("zero address is recognised", () => {
   assert(isZeroAddress("0x0000000000000000000000000000000000000000"));
   assert(!isZeroAddress(WHALE));
+});
+
+await test("default watchlist contains at least 5 checksummed Pharos addresses", () => {
+  assert(DEFAULT_WATCHLIST.length >= 5);
+  for (const addr of DEFAULT_WATCHLIST) {
+    const r = normalizeAddress(addr);
+    assert(r.ok && r.address === addr, `invalid default watch address ${addr}`);
+  }
+  eq(labelAddress("0x0000000000000000000000000000000000000000"), "Zero Address");
 });
 
 suite("share of supply");
@@ -414,13 +423,30 @@ await test("an unreadable chain is RPC_UNAVAILABLE", async () => {
   eq(r.code, "RPC_UNAVAILABLE");
 });
 
-await test("the watchlist finds activity touching a watched address", async () => {
+await test("the watchlist finds activity touching a watched address and builds a summary", async () => {
   const chain = fakeChain(scanSpec);
-  const r = await scan({ rpc: chain, hours: 1, minShareBps: 1, watch: [WHALE] });
+  const r = await scan({ rpc: chain, hours: 1, minShareBps: 1, watch: [WHALE, ALICE] });
   assert(r.ok);
-  eq(r.watch.addresses.length, 1);
+  eq(r.watch.addresses.length, 2);
+  eq(r.watch.summary.length, 2);
+  const whaleSum = r.watch.summary.find((s) => s.address === WHALE);
+  const aliceSum = r.watch.summary.find((s) => s.address === ALICE);
+  assert(whaleSum && aliceSum);
+  eq(whaleSum.status, "ACTIVE");
+  eq(whaleSum.inCount, 1);
+  eq(whaleSum.outCount, 0);
+  eq(aliceSum.inCount, 2);
+  eq(aliceSum.outCount, 1);
   assert(r.watch.activity.length >= 1);
-  eq(r.watch.activity[0].direction, "IN");
+  assert(typeof r.findings[0].explanation === "string" && r.findings[0].explanation.length > 0);
+});
+
+await test("omitting watch defaults to the 5 Pharos watched addresses", async () => {
+  const chain = fakeChain(scanSpec);
+  const r = await scan({ rpc: chain, hours: 1, minShareBps: 1 });
+  assert(r.ok);
+  eq(r.watch.addresses.length, DEFAULT_WATCHLIST.length);
+  eq(r.watch.summary.length, DEFAULT_WATCHLIST.length);
 });
 
 await test("a mistyped watch address is refused, not silently watched", async () => {
@@ -452,6 +478,89 @@ await test("a large window is capped rather than attempted", async () => {
   assert(r.ok);
   assert(r.scan.blocksCapped);
   eq(r.scan.chunksPlanned, LIMITS.maxChunks);
+});
+
+await test("a capped window states the span it did not cover", async () => {
+  // "hours: 6" is a request, not a result. With 1s blocks the cap allows 6000
+  // blocks, which is 100 minutes — the report has to say 100 minutes, not 6h.
+  const chain = fakeChain({ ...scanSpec, head: 500000, blockTime: 1 });
+  const r = await scan({ rpc: chain, hours: 6, minShareBps: 1 });
+  assert(r.ok);
+  eq(r.scan.blocksCap, LIMITS.maxChunks * 1000);
+  eq(r.scan.windowBlocks, LIMITS.maxChunks * 1000);
+  eq(r.scan.windowSecondsRequested, 6 * 3600);
+  assert(
+    r.scan.windowSecondsCovered < r.scan.windowSecondsRequested,
+    `covered ${r.scan.windowSecondsCovered}s must be less than requested ${r.scan.windowSecondsRequested}s`,
+  );
+  assert(r.scan.capTruncatedBlocks > 0);
+  // The cap truncates the request, not the read: whatever was asked for inside
+  // the cap was actually read.
+  eq(r.scan.windowCoverageBps, 10000);
+});
+
+await test("a scan whose every token metadata read was throttled is not an empty market", async () => {
+  // The failure mode this guards: transfers are found, none can be measured,
+  // and the caller reads "0 findings" as "nothing big happened".
+  const chain = fakeChain({
+    ...scanSpec,
+    failTokens: new Set([WPROS.toLowerCase(), USDC.toLowerCase()]),
+  });
+  const r = await scan({ rpc: chain, hours: 1, minShareBps: 1 });
+  assert(!r.ok, "an unmeasurable scan must not return ok");
+  eq(r.code, "METADATA_UNAVAILABLE");
+  assert(r.error.includes("could be read"), r.error);
+  eq(r.scan.tokensSeen, 2);
+  assert(r.scan.metadataUnavailable > 0);
+});
+
+await test("a throttled token is counted as unmeasurable, not as not-ERC-20", async () => {
+  const chain = fakeChain({
+    ...scanSpec,
+    failTokens: new Set([USDC.toLowerCase()]),
+  });
+  const r = await scan({ rpc: chain, hours: 1, minShareBps: 1 });
+  assert(r.ok, r.error);
+  assert(r.scan.degraded, "one unreadable token makes the ranking a subset");
+  assert(r.scan.metadataUnavailable > 0);
+  eq(r.scan.metadataInvalid, 0, "an outage is not an invalid contract");
+  assert(r.scan.transfersUnranked > 0);
+  // WPROS is still readable, so the scan is degraded but not empty.
+  assert(r.findings.every((f) => f.token.symbol === "WPROS"));
+  eq(r.scan.transfersRanked + r.scan.transfersUnranked, r.scan.transfersDecoded);
+});
+
+await test("a contract that answers nothing is invalid, not unavailable", async () => {
+  const r = await readToken(
+    { call: async () => "0x" },
+    "0x3333333333333333333333333333333333333333",
+  );
+  eq(r.ok, false);
+  eq(r.transient, false, "an empty answer is a verdict about the contract");
+  eq(r.reason, "DECIMALS_UNREADABLE");
+});
+
+await test("a throttled metadata read is unavailable, not invalid", async () => {
+  const r = await readToken(
+    {
+      call: async () => {
+        throw Object.assign(new Error("cu limit exceeded"), { retryable: true });
+      },
+    },
+    "0x4444444444444444444444444444444444444444",
+  );
+  eq(r.ok, false);
+  eq(r.transient, true);
+  assert(r.reason.startsWith("METADATA_UNAVAILABLE"), r.reason);
+});
+
+await test("findings cut by the row limit say how many were dropped", async () => {
+  const chain = fakeChain(scanSpec);
+  const r = await scan({ rpc: chain, hours: 1, minShareBps: 1, limit: 1 });
+  assert(r.ok);
+  eq(r.scan.findingsReturned, 1);
+  eq(r.scan.findingsMatched, 3);
+  eq(r.scan.findingsTruncated, 2);
 });
 
 report();

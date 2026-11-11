@@ -75,29 +75,69 @@ const uintFrom = (hex) => {
 };
 
 /**
+ * True when the read failed because the endpoint could not answer, not because
+ * the contract answered something unusable. RpcError already carries the
+ * distinction; a bare throw (network, abort) is treated as transient too.
+ */
+function isTransientRpcError(e) {
+  if (!e) return false;
+  if (e.retryable === true) return true;
+  if (e.status === 429 || (typeof e.status === "number" && e.status >= 500)) return true;
+  if (e.name === "RpcError") return e.code === null;
+  // Anything that is not an RPC verdict (network failure, abort, a decoder
+  // throwing) is "we do not know", and unknown must not be reported as a
+  // statement about the contract.
+  return true;
+}
+
+/**
  * Read symbol/decimals/totalSupply for one token contract.
  *
  * @returns {Promise<{ok:true, token:object} | {ok:false, reason:string, address:string}>}
  */
 export async function readToken(rpc, address) {
-  let decimals, supply, symbolHex;
-  try {
-    [decimals, supply, symbolHex] = await Promise.all([
-      rpc.call("eth_call", [{ to: address, data: SELECTORS.decimals }, "latest"]).then(uintFrom),
-      rpc.call("eth_call", [{ to: address, data: SELECTORS.totalSupply }, "latest"]).then(uintFrom),
-      rpc.call("eth_call", [{ to: address, data: SELECTORS.symbol }, "latest"]),
-    ]);
-  } catch (e) {
-    return { ok: false, address, reason: `METADATA_UNREADABLE: ${e.message}` };
+  // Each getter is read on its own. A single 429 used to fail all three through
+  // Promise.all, which turned "the endpoint throttled us" into "this is not an
+  // ERC-20" — a claim about the contract made from an answer we never got.
+  const read = async (selector, decode) => {
+    try {
+      const raw = await rpc.call("eth_call", [{ to: address, data: selector }, "latest"]);
+      return { ok: true, value: decode(raw) };
+    } catch (e) {
+      return { ok: false, transient: isTransientRpcError(e), error: e.message };
+    }
+  };
+
+  const [d, s, sym] = await Promise.all([
+    read(SELECTORS.decimals, uintFrom),
+    read(SELECTORS.totalSupply, uintFrom),
+    read(SELECTORS.symbol, (hex) => hex),
+  ]);
+
+  // Throttling first: "we could not ask" is not "the contract said nothing".
+  const transientFailure = [d, s, sym].find((r) => !r.ok && r.transient);
+  if (transientFailure) {
+    return {
+      ok: false,
+      address,
+      transient: true,
+      reason: `METADATA_UNAVAILABLE: eth_call failed (${transientFailure.error.slice(0, 160)})`,
+    };
+  }
+  for (const r of [d, s, sym]) {
+    if (!r.ok) return { ok: false, address, transient: false, reason: `METADATA_INVALID: ${r.error.slice(0, 160)}` };
   }
 
-  if (decimals === null) return { ok: false, address, reason: "DECIMALS_UNREADABLE" };
-  if (decimals > 36n) return { ok: false, address, reason: `DECIMALS_OUT_OF_RANGE: ${decimals}` };
-  if (supply === null) return { ok: false, address, reason: "TOTAL_SUPPLY_UNREADABLE" };
-  if (supply === 0n) return { ok: false, address, reason: "TOTAL_SUPPLY_ZERO" };
+  const decimals = d.value;
+  const supply = s.value;
 
-  const symbol = decodeSymbol(symbolHex);
-  if (symbol === null) return { ok: false, address, reason: "SYMBOL_UNREADABLE" };
+  if (decimals === null) return { ok: false, address, transient: false, reason: "DECIMALS_UNREADABLE" };
+  if (decimals > 36n) return { ok: false, address, transient: false, reason: `DECIMALS_OUT_OF_RANGE: ${decimals}` };
+  if (supply === null) return { ok: false, address, transient: false, reason: "TOTAL_SUPPLY_UNREADABLE" };
+  if (supply === 0n) return { ok: false, address, transient: false, reason: "TOTAL_SUPPLY_ZERO" };
+
+  const symbol = decodeSymbol(sym.value);
+  if (symbol === null) return { ok: false, address, transient: false, reason: "SYMBOL_UNREADABLE" };
 
   return {
     ok: true,

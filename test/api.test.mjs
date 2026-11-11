@@ -35,12 +35,15 @@ async function get(query, chain = chainFor(), env = {}) {
 
 suite("API: read-only scan");
 
-await test("a scan returns ranked findings and the limits", async () => {
+await test("a scan returns ranked findings, default 5 watched addresses, and the limits", async () => {
   const { status, body } = await get("?hours=1&minShareBps=1&limit=20");
   eq(status, 200);
   assert(body.ok, JSON.stringify(body));
   eq(body.findings.length, 2);
   eq(body.findings[0].sharePercent, "0.1");
+  assert(body.findings[0].explanation.includes(body.findings[0].token.symbol));
+  assert(body.watch.addresses.length >= 5);
+  eq(body.watch.summary.length, body.watch.addresses.length);
   eq(body.limits.maxHours, LIMITS.maxHours);
   eq(body.scan.chainId, 1672);
 });
@@ -173,6 +176,38 @@ await test("a partial scan is 200 but says it is partial", async () => {
   assert(body.scan.partial);
   eq(body.scan.failedChunkCount, 1);
   assert(body.findings.length > 0);
+});
+
+await test("transfers whose token metadata was throttled are 502, not an empty 200", async () => {
+  // Same shape as the all-chunks-failed case, one layer up: the logs arrived,
+  // the contracts did not answer, and "no whales" would be a lie about the chain.
+  const chain = fakeChain({
+    head: 5000,
+    blockTime: 6,
+    tokens,
+    logs: goodLogs,
+    failTokens: new Set(Object.keys(tokens).map((a) => a.toLowerCase())),
+  });
+  const { status, body } = await get("?hours=1", chain);
+  eq(status, 502);
+  eq(body.code, "METADATA_UNAVAILABLE");
+  assert(body.scan.transfersRead > 0, "the transfers were seen, which is why this is not an empty window");
+});
+
+await test("a degraded scan is 200 but reports what it could not measure", async () => {
+  const [first] = Object.keys(tokens);
+  const chain = fakeChain({
+    head: 5000,
+    blockTime: 6,
+    tokens,
+    logs: goodLogs,
+    failTokens: new Set(Object.keys(tokens).filter((a) => a !== first).map((a) => a.toLowerCase())),
+  });
+  const { status, body } = await get("?hours=1&minShareBps=1", chain);
+  eq(status, 200);
+  assert(body.scan.degraded, "a subset ranking must be labelled");
+  assert(body.scan.metadataUnavailable > 0);
+  assert(body.scan.transfersUnranked > 0);
 });
 
 suite("API: method");
