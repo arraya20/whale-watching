@@ -177,9 +177,12 @@ ERC-20 movement is read from `Transfer` logs, but native PROS has no log: its
 decimals) is therefore read with `eth_getBlockByNumber(n, true)` over a bounded
 window and filtered to transactions paying or collecting a watched address.
 
-- The native window is capped at `NATIVE_MAX_BLOCKS = 4000` (a measured ceiling,
-  below the 6000-block ERC-20 cap), read in JSON-RPC batches of 100 at concurrency
-  2.
+- The native transfer scan is capped at `NATIVE_MAX_BLOCKS = 600` (a measured
+  ceiling, well below the 6000-block ERC-20 cap), read in JSON-RPC batches of 100
+  at concurrency 2. Per-address `nativeBalance` and `nativeDelta` are read from
+  `eth_getBalance` at the start and end of the **full requested window**, so the
+  PROS Δ column is honest for `hours` even though the transfer table covers only
+  the most recent 600 blocks.
 - `minPros` is a value term, not a share term: native has no supply to divide by.
   A native transfer below `minPros` PROS is dropped from `watch.native`; the
   default `"0"` reports every native movement touching a watched address.
@@ -209,7 +212,7 @@ window and filtered to transactions paying or collecting a watched address.
 ## Running
 
 ```
-npm test              # 69 unit + 20 API, offline, no network
+npm test              # 70 unit + 20 API, offline, no network
 npm run test:live     # 14 tests against rpc.pharos.xyz
 npm run verify:chain  # independent recomputation, 16 checks
 npm run dev           # wrangler pages dev on :8781

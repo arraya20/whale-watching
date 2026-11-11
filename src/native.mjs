@@ -20,10 +20,14 @@ export const NATIVE_SYMBOL = "PROS";
 export const NATIVE_DECIMALS = 18;
 export const NATIVE_BATCH_SIZE = 100;
 export const NATIVE_CONCURRENCY = 2;
-// Native reads are heavier than a log range, so they are capped below the
-// ERC-20 window cap. 4000 blocks is the budget the sibling audit agent proved on
-// this endpoint; it is a measured ceiling, not a preference.
-export const NATIVE_MAX_BLOCKS = 4000;
+// Native reads are heavier than a log range, so they are capped well below the
+// ERC-20 window cap. Full block bodies are fetched one JSON-RPC batch per 100
+// blocks and serialised against the same rate limiter as every other call; a
+// large cap turns a scan into dozens of sequential full-block batches that push
+// a Workers request past Cloudflare's 100s wall timeout (HTTP 524). 600 blocks
+// is a measured, safe ceiling: ~6 batches, with the per-address balance delta
+// still covering the full requested window.
+export const NATIVE_MAX_BLOCKS = 600;
 
 const QUANTITY = /^0x[0-9a-fA-F]+$/;
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;

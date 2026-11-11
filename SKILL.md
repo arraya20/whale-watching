@@ -35,8 +35,9 @@ the caller's own claim. A tracker that believes its requester is not a tracker.
    an assumed value silently scans the wrong span.
 3. Chunk the window, bounded to 6000 blocks (`maxChunks`), and read transfer logs.
 4. Read native PROS from block bodies (`eth_getBlockByNumber(n, true)`) over a
-   separate 4000-block cap, batched and fail-soft: a native gap reports
-   `scan.native.partial` but never invalidates the ERC-20 findings.
+   separate 600-block cap, batched and fail-soft: a native gap reports
+   `scan.native.partial` but never invalidates the ERC-20 findings. Native
+   balance and delta are read over the full window via `eth_getBalance`.
 5. Resolve each token's decimals and total supply from the chain.
 6. Rank by share of supply in basis points, not by an absolute wei amount.
    Decimals differ per asset — USDC is 6, WPROS 18 — so a wei threshold ranks

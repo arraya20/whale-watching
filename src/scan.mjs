@@ -285,7 +285,10 @@ export async function scan({
   const nativeBalances = new Map(); // lower -> {start: bigint|null, head: bigint|null}
   if (watched.length > 0 && typeof client.batch === "function") {
     const nativeFromBlock = Math.max(fromBlock, head - NATIVE_MAX_BLOCKS + 1);
-    const startBlock = Math.max(0, nativeFromBlock - 1);
+    // Balance delta covers the full requested window, not just the bounded block
+    // body scan, so the summary's PROS Δ is the honest change over `hours` even
+    // when individual transfers are only read from the most recent blocks.
+    const startBlock = Math.max(0, fromBlock - 1);
 
     const resolveNativeLabel = (addr) => labelAddress(addr, dynamicLabels) ?? null;
 

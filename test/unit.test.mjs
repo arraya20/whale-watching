@@ -634,6 +634,24 @@ await test("scan reports native movement and balance delta in the watch summary"
   assert(r.scan.native && !r.scan.native.partial);
 });
 
+await test("native transfer scan is bounded while balance delta covers the full window", async () => {
+  const chain = fakeChain({
+    ...scanSpec,
+    head: 5000,
+    blockTime: 1,
+    balances: {
+      [WHALE.toLowerCase()]: (block) => (block === 5000n ? 3n * 10n ** 18n : 1n * 10n ** 18n),
+    },
+  });
+  const r = await scan({ rpc: chain, hours: 1, minShareBps: 1, watch: [WHALE] });
+  assert(r.ok, r.error);
+  assert(r.scan.native && r.scan.native.truncated, "native transfer scan should be truncated to the cap");
+  eq(r.scan.native.blocksPlanned, 600);
+  const whale = r.watch.summary.find((s) => s.address === WHALE);
+  assert(whale);
+  eq(whale.nativeDelta, "+2");
+});
+
 await test("minPros filters native transfers below the value term", async () => {
   const chain = fakeChain({
     ...scanSpec,
